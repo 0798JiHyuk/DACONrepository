@@ -28,6 +28,8 @@ class VoicePhishingSimulator:
 
         # 2. 시나리오 타입 설정 (기본값: prosecutor)
         self.scenario_type = self.target_info.get("scenario_type", "prosecutor")
+        if self.scenario_type not in ["prosecutor", "loan"]:
+            self.scenario_type = "prosecutor"
 
         # 3. 랜덤 페르소나 생성 (성별, 이름, 소속 등)
         self.attacker_gender = random.choice(["male", "female"])
@@ -247,13 +249,38 @@ class VoicePhishingSimulator:
     # ==========================
     def transcribe_audio(self, audio_bytes):
         try:
+            import sys
+            sys.stderr.write(f"STT_INPUT_BYTES: {len(audio_bytes)}\n")
+            sys.stderr.flush()
+            # Try re-encode to wav to avoid unsupported/odd codecs.
             audio_file = BytesIO(audio_bytes)
-            audio_file.name = "voice.mp3"
+            audio_file.name = "voice.bin"
+            try:
+                from pydub import AudioSegment
+                audio = AudioSegment.from_file(audio_file)
+                wav_io = BytesIO()
+                audio.export(wav_io, format="wav")
+                wav_io.seek(0)
+                audio_file = wav_io
+                audio_file.name = "voice.wav"
+                sys.stderr.write("STT_REENCODE: wav\n")
+                sys.stderr.flush()
+            except Exception as reenc_err:
+                sys.stderr.write(f"STT_REENCODE_FAIL: {reenc_err}\n")
+                sys.stderr.flush()
+                audio_file = BytesIO(audio_bytes)
+                audio_file.name = "voice.mp3"
             transcript = client.audio.transcriptions.create(
                 model="whisper-1", file=audio_file, language="ko"
             )
+            sys.stderr.write(f"STT_RESPONSE: {transcript}\n")
+            sys.stderr.flush()
             return transcript.text
-        except Exception:
+        except Exception as e:
+            import traceback
+            sys.stderr.write("STT_ERROR:\n")
+            sys.stderr.write(traceback.format_exc())
+            sys.stderr.flush()
             return None
 
     def get_feedback(self):

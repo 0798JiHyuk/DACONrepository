@@ -1,10 +1,19 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import path from "path";
 
 function getRequiredEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
+}
+
+function getRequiredEnvAny(names: string[]) {
+  for (const name of names) {
+    const v = process.env[name];
+    if (v) return v;
+  }
+  throw new Error(`Missing env: ${names.join(" or ")}`);
 }
 
 function sanitizeFilename(name: string) {
@@ -38,9 +47,9 @@ function getClient() {
   return cached;
 }
 
-export async function uploadVoiceToS3(file: Express.Multer.File) {
-  const bucket = getRequiredEnv("AWS_S3_BUCKET");
-  const prefix = process.env.AWS_S3_PREFIX || "uploads/voice";
+export async function uploadVoiceToS3(file: Express.Multer.File, prefixOverride?: string) {
+  const bucket = getRequiredEnvAny(["AWS_S3_BUCKET", "S3_BUCKET"]);
+  const prefix = prefixOverride || process.env.AWS_S3_PREFIX || "uploads/voice";
   const key = buildKey(prefix, file.originalname);
 
   const client = getClient();
@@ -61,4 +70,25 @@ export async function uploadVoiceToS3(file: Express.Multer.File) {
       : `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
 
   return { url, key, bucket };
+}
+
+function coerceKeyFromUrlOrKey(input: string, bucket: string) {
+  if (!input) return input;
+  if (!input.startsWith("http://") && !input.startsWith("https://")) return input;
+  try {
+    const u = new URL(input);
+    let p = u.pathname.replace(/^\//, "");
+    if (p.startsWith(`${bucket}/`)) p = p.slice(bucket.length + 1);
+    return p;
+  } catch {
+    return input;
+  }
+}
+
+export async function getPresignedGetUrl(keyOrUrl: string, expiresSeconds: number) {
+  const bucket = getRequiredEnvAny(["AWS_S3_BUCKET", "S3_BUCKET"]);
+  const key = coerceKeyFromUrlOrKey(keyOrUrl, bucket);
+  const client = getClient();
+  const cmd = new GetObjectCommand({ Bucket: bucket, Key: key });
+  return getSignedUrl(client, cmd, { expiresIn: expiresSeconds });
 }

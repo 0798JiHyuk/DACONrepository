@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../db/pool";
 import { requireAuth } from "../middlewares/requireAuth";
+import { getPresignedGetUrl } from "../services/s3.service";
 
 export const trainingShortRoutes = Router();
 
@@ -18,24 +19,58 @@ trainingShortRoutes.get("/shorts", requireAuth, async (req, res) => {
   }
   params.push(limit);
 
-  const { rows } = await pool.query(
-    `
-    SELECT id, audio_url, category_code
-    FROM training_shorts
-    ${where}
-    ORDER BY random()
-    LIMIT $${params.length}
-    `,
-    params
-  );
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT id, audio_url, category_code
+      FROM training_shorts
+      ${where}
+      ORDER BY random()
+      LIMIT $${params.length}
+      `,
+      params
+    );
 
-  const items = rows.map((r) => ({
-    id: r.id,
-    audioUrl: r.audio_url,
-    categoryCode: r.category_code,
-  }));
+    const expiresRaw = Number(process.env.AWS_S3_PRESIGN_EXPIRES ?? 600);
+    const expiresSeconds = Math.min(600, Math.max(300, expiresRaw));
 
-  res.json({ success: true, data: { items }, error: null });
+    const items = await Promise.all(
+      rows.map(async (r) => {
+        const audioUrl = r.audio_url;
+        try {
+          const audioPlayUrl = audioUrl ? await getPresignedGetUrl(audioUrl, expiresSeconds) : null;
+          console.info("[shorts/list] presign ok", { id: r.id, audioUrl, hasAudioPlayUrl: !!audioPlayUrl });
+          return {
+            id: r.id,
+            audioUrl,
+            audioPlayUrl,
+            categoryCode: r.category_code,
+          };
+        } catch (err: any) {
+          console.warn("[shorts/list] presign failed", {
+            id: r.id,
+            audioUrl,
+            error: err?.message || String(err),
+          });
+          return {
+            id: r.id,
+            audioUrl,
+            audioPlayUrl: null,
+            categoryCode: r.category_code,
+          };
+        }
+      })
+    );
+
+    res.json({ success: true, data: { items }, error: null });
+  } catch (err: any) {
+    const msg = err?.message || "Failed to build presigned URL";
+    return res.status(503).json({
+      success: false,
+      data: null,
+      error: { code: "S3_NOT_CONFIGURED", message: msg, details: {} },
+    });
+  }
 });
 
 // POST /api/training/shorts/sessions
@@ -73,15 +108,19 @@ trainingShortRoutes.post("/shorts/attempts", requireAuth, async (req, res) => {
 
   const body = z
     .object({
-      sessionId: z.number().int(),
-      roundNo: z.number().int().min(1).max(20),
-      shortId: z.number().int(),
+      sessionId: z.coerce.number().int(),
+      roundNo: z.coerce.number().int().min(1).max(20),
+      shortId: z.coerce.number().int(),
       userChoice: z.enum(["real", "fake"]),
-      timeMs: z.number().int().min(0).max(10 * 60 * 1000).optional(),
+      timeMs: z.coerce.number().int().min(0).max(10 * 60 * 1000).optional(),
     })
     .safeParse(req.body);
 
   if (!body.success) {
+    console.warn("[shorts/attempts] 400 BAD_REQUEST", {
+      requestBody: req.body,
+      zod: body.error.flatten(),
+    });
     return res.status(400).json({
       success: false,
       data: null,

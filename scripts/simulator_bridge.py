@@ -19,8 +19,18 @@ simulators = {}
 
 
 def write_response(obj):
-    # Avoid UnicodeEncodeError on surrogate characters by encoding with replacement.
-    payload = json.dumps(obj, ensure_ascii=False) + "\n"
+    # Avoid UnicodeEncodeError on surrogate characters by sanitizing strings.
+    def _clean(val):
+        if isinstance(val, str):
+            return val.encode("utf-8", errors="replace").decode("utf-8")
+        if isinstance(val, list):
+            return [_clean(v) for v in val]
+        if isinstance(val, dict):
+            return {k: _clean(v) for k, v in val.items()}
+        return val
+
+    safe = _clean(obj)
+    payload = json.dumps(safe, ensure_ascii=False) + "\n"
     sys.stdout.buffer.write(payload.encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
@@ -67,6 +77,44 @@ def handle_chat(req):
     }
 
 
+def _fetch_audio_bytes(url: str) -> bytes:
+    import urllib.request
+    with urllib.request.urlopen(url) as resp:
+        data = resp.read()
+        sys.stderr.write(f"STT_FETCH ok bytes={len(data)}\n")
+        sys.stderr.flush()
+        return data
+
+
+def handle_transcribe(req):
+    session_id = req.get("sessionId")
+    audio_url = req.get("audioUrl")
+    user_profile = req.get("userProfile")
+    if session_id is None or not audio_url:
+        raise ValueError("sessionId and audioUrl are required for transcribe")
+    sim = ensure_simulator(session_id, user_profile or '{"user_profile": {"name": "사용자", "scenario_type": "default"}}')
+    try:
+        audio_bytes = _fetch_audio_bytes(audio_url)
+    except Exception as e:
+        sys.stderr.write(f"STT_FETCH error: {e}\n")
+        sys.stderr.flush()
+        raise
+    transcript = sim.transcribe_audio(audio_bytes)
+    sys.stderr.write(f"STT_TRANSCRIPT: {transcript}\n")
+    sys.stderr.flush()
+    return {"ok": True, "transcript": transcript}
+
+
+def handle_feedback(req):
+    session_id = req.get("sessionId")
+    user_profile = req.get("userProfile")
+    if session_id is None:
+        raise ValueError("sessionId is required for feedback")
+    sim = ensure_simulator(session_id, user_profile or '{"user_profile": {"name": "사용자", "scenario_type": "default"}}')
+    feedback = sim.get_feedback()
+    return {"ok": True, "feedback": feedback}
+
+
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -79,6 +127,10 @@ for line in sys.stdin:
             data = handle_init(req)
         elif action == "chat":
             data = handle_chat(req)
+        elif action == "transcribe":
+            data = handle_transcribe(req)
+        elif action == "feedback":
+            data = handle_feedback(req)
         else:
             raise ValueError("Unknown action")
         data["id"] = req_id

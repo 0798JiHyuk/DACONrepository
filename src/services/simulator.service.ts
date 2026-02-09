@@ -13,6 +13,19 @@ type ChatResult = {
   audioBase64: string | null;
 };
 
+type FeedbackResult = {
+  score?: number;
+  summary?: string;
+  advice?: string;
+  good_points?: string[];
+  bad_points?: string[];
+  detailed_analysis?: any;
+};
+
+type TranscribeResult = {
+  transcript?: string | null;
+};
+
 class SimulatorClient {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private pending = new Map<number, Pending>();
@@ -90,6 +103,22 @@ class SimulatorClient {
       audioBase64: res.audioBase64 ?? null,
     };
   }
+
+  async feedback(sessionId: number, userProfileJson?: string): Promise<FeedbackResult> {
+    await this.ensureInit(sessionId, userProfileJson);
+    const res = await this.send({ action: "feedback", sessionId, userProfile: userProfileJson });
+    return (res.feedback ?? {}) as FeedbackResult;
+  }
+
+  async transcribe(
+    sessionId: number,
+    audioUrl: string,
+    userProfileJson?: string
+  ): Promise<TranscribeResult> {
+    await this.ensureInit(sessionId, userProfileJson);
+    const res = await this.send({ action: "transcribe", sessionId, audioUrl, userProfile: userProfileJson });
+    return { transcript: res.transcript ?? null };
+  }
 }
 
 const client = new SimulatorClient();
@@ -100,4 +129,20 @@ export async function simulatorChatTurn(input: {
   userProfileJson?: string;
 }): Promise<ChatResult> {
   return client.chatTurn(input.sessionId, input.userInput, input.userProfileJson);
+}
+
+export async function simulatorFeedback(input: {
+  sessionId: number;
+  userProfileJson?: string;
+}): Promise<FeedbackResult> {
+  return client.feedback(input.sessionId, input.userProfileJson);
+}
+
+export async function simulatorTranscribe(input: {
+  sessionId: number;
+  audioUrl: string;
+  userProfileJson?: string;
+}): Promise<string | null> {
+  const res = await client.transcribe(input.sessionId, input.audioUrl, input.userProfileJson);
+  return res.transcript ?? null;
 }

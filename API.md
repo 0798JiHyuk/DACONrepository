@@ -55,7 +55,20 @@
 - Query: `categoryCode?`, `limit?` (default 5, max 20)
 - Response
 ```json
-{ "success": true, "data": { "items": [{ "id": 1, "audioUrl": "...", "categoryCode": "..." }] }, "error": null }
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "audioUrl": "uploads/shorts/2026/02/09/123.mp3",
+        "audioPlayUrl": "https://...presigned...",
+        "categoryCode": "..."
+      }
+    ]
+  },
+  "error": null
+}
 ```
 
 ### POST /api/training/shorts/sessions
@@ -138,6 +151,7 @@
 {
   "success": true,
   "data": {
+    "userText": "무슨 소리세요?",
     "aiText": "...",
     "aiAudioUrl": "https://...",
     "aiAudioBase64": "base64...",
@@ -148,6 +162,8 @@
   "error": null
 }
 ```
+- 설명
+  - `inputMode="voice"` 이고 `text`가 비어있을 경우, 서버가 STT를 수행해 `userText`에 반영합니다.
 
 ### POST /api/training/longs/sessions/:id/finish
 - 인증 필요
@@ -168,6 +184,8 @@
   "error": null
 }
 ```
+- 설명
+  - `score`, `ai_summary`, `ai_coaching`, `good_points`, `improvement_points`는 시뮬레이터 피드백 결과를 반영합니다.
 
 ---
 
@@ -240,10 +258,26 @@
 
 ## Uploads (음성 업로드)
 
-### POST /api/uploads/voice
+### GET /api/uploads/presign?key=...&expires=600
+- 인증 필요
+- Query:
+  - `key` (필수): S3 object key 또는 기존 URL
+  - `expires` (선택): 만료 초 (300~600으로 강제)
+- Response
+```json
+{ "success": true, "data": { "url": "https://...presigned...", "expiresSeconds": 600 }, "error": null }
+```
+
+### POST /api/uploads/:type
 - 인증 필요
 - Content-Type: `multipart/form-data`
 - Form Field: `voiceFile` (파일)
+- `type` 값: `voice` | `records` | `clones` | `shorts`
+- S3 경로 규칙:
+  - `uploads/voice/`
+  - `uploads/records/`
+  - `uploads/clones/`
+  - `uploads/shorts/`
 - Response
 ```json
 {

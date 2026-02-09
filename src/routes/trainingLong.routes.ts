@@ -81,7 +81,7 @@ trainingLongRoutes.post("/longs/messages", requireAuth, async (req, res) => {
     });
   }
 
-  const userText = body.data.text ?? null;
+  let userText = body.data.text ?? null;
   const userAudioUrl = body.data.userAudioUrl ?? null;
 
   const insertedUser = await pool.query(
@@ -96,12 +96,26 @@ trainingLongRoutes.post("/longs/messages", requireAuth, async (req, res) => {
   const ai = await aiGenerateLongformReply({
     sessionId,
     turnNo,
+    inputMode,
     userText,
     userAudioUrl,
     userProfileJson: body.data.userProfileJson,
   });
 
+  if (!userText && ai.userText) {
+    userText = ai.userText;
+    await pool.query(`UPDATE longform_messages SET text=$2 WHERE id=$1`, [insertedUser.rows[0].id, userText]);
+  }
+
   const aiTextSafe = (ai.aiText || "").replace(/[\uD800-\uDFFF]/g, "");
+
+  const audioBase64Raw = ai.aiAudioBase64 ?? null;
+  const disableAudioBase64 = process.env.LONGFORM_AUDIO_BASE64_DISABLED === "true";
+  const maxBase64 = Number(process.env.LONGFORM_AUDIO_BASE64_MAX_LEN ?? 500000);
+  const audioBase64 =
+    disableAudioBase64 || (audioBase64Raw && audioBase64Raw.length > maxBase64)
+      ? null
+      : audioBase64Raw;
 
   const insertedAi = await pool.query(
     `
@@ -113,7 +127,7 @@ trainingLongRoutes.post("/longs/messages", requireAuth, async (req, res) => {
       sessionId,
       turnNo,
       aiTextSafe,
-      { aiAudioUrl: ai.aiAudioUrl, aiAudioBase64: ai.aiAudioBase64, status: ai.status },
+      { aiAudioUrl: ai.aiAudioUrl, aiAudioBase64: audioBase64, status: ai.status },
     ]
   );
 
@@ -127,12 +141,22 @@ trainingLongRoutes.post("/longs/messages", requireAuth, async (req, res) => {
     );
   }
 
+  console.info("[longs/messages] turn", {
+    sessionId,
+    turnNo,
+    inputMode,
+    userText: ai.userText ?? userText,
+    aiText: ai.aiText,
+    status: ai.status,
+  });
+
   res.json({
     success: true,
     data: {
+      userText: ai.userText ?? userText,
       aiText: ai.aiText,
       aiAudioUrl: ai.aiAudioUrl,
-      aiAudioBase64: ai.aiAudioBase64,
+      aiAudioBase64: audioBase64,
       status: ai.status,
       flags: ai.flags,
       messageIds: { user: insertedUser.rows[0].id, ai: insertedAi.rows[0].id },
